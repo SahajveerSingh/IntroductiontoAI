@@ -2,10 +2,10 @@
 
 python gbfs.py PathFinder-test.txt GBFS
 
-# GBFS Test Report — Greedy Best First Search
+# Test Report
 
-**Program:** `search.py`  
-**Method:** `Greedy Best First`  
+**Program:** `All programs`  
+**Searches:** `Searches`  
 **Total Test Cases:** 16  
 **All Passed:** ✅
 
@@ -305,7 +305,7 @@ TC16_dead_ends.txt Greedy Best First
 
 ## Observations & Insights
 
-- **TC02 & TC12** confirm GBFS handles trivial/degenerate cases without errors.
+- **TC02 & TC12** confirm GBFS or other searches handles trivial/degenerate cases without errors.
 - **TC04** confirms graceful handling of unsolvable problems.
 - **TC08** is a classic demonstration of GBFS's weakness — it is **not guaranteed to find the optimal (lowest cost) path**, only a path guided by heuristic distance.
 - **TC09** confirms the assignment's tie-breaking rule (ascending node ID) is correctly implemented.
