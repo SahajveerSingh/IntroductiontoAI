@@ -1,7 +1,3 @@
-# To parse files
-
-python gbfs.py PathFinder-test.txt GBFS
-
 # Test Report
 
 **Program:** `All programs`  
