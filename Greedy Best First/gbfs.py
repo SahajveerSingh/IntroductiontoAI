@@ -132,10 +132,10 @@ def main():
         sys.exit(1)
 
     filename = sys.argv[1]
-    method = sys.argv[2].upper()
+    method = sys.argv[2]
 
-    if method != 'GBFS':
-        print(f"This script only supports GBFS. Got: {sys.argv[2]}")
+    if method.upper() not in ('GBFS', 'GREEDY BEST FIRST'):
+        print(f"This script only supports 'Greedy Best First'. Got: {sys.argv[2]}")
         sys.exit(1)
 
     nodes, edges, origin, destinations = parse_problem(filename)
@@ -146,7 +146,7 @@ def main():
         print(f"{filename} {sys.argv[2]}")
         print("No solution found.")
     else:
-        path_str = ' -> '.join(map(str, path))
+        path_str = str(path)
         print(f"{filename} {sys.argv[2]}")
         print(f"{goal} {num_nodes}")
         print(path_str)
