@@ -114,22 +114,16 @@ def a_star_search(graph, coordinates, start, goals):
     insertion_order += 1
 
     while frontier:
-        # Sort by:
-        # 1. lowest f
-        # 2. smaller node id
-        # 3. earlier insertion order
         frontier.sort(key=lambda item: (item["f"], item["node"], item["order"]))
         current = frontier.pop(0)
 
-        # Goal test
         if current["node"] in goals:
             return current["node"], nodes_created, current["path"]
 
-        # Expand children in ascending node order
         children = sorted(graph.get(current["node"], []), key=lambda x: x[0])
 
         for child, cost in children:
-            if child not in current["path"]:  # avoid cycles in tree path
+            if child not in current["path"]:
                 new_g = current["g"] + cost
                 new_h = heuristic(child, goals, coordinates)
                 new_f = new_g + new_h
@@ -150,7 +144,7 @@ def a_star_search(graph, coordinates, start, goals):
 
 
 # -------------------------------
-# MAIN PROGRAM (CLI REQUIRED)
+# MAIN PROGRAM
 # -------------------------------
 def main():
     if len(sys.argv) != 3:
@@ -160,32 +154,28 @@ def main():
     filename = sys.argv[1]
     method = sys.argv[2].upper()
 
-    coordinates, graph, origin, destinations = parse_input_file(filename)
+    try:
+        coordinates, graph, origin, destinations = parse_input_file(filename)
+    except FileNotFoundError:
+        print(f"Error: File '{filename}' not found.")
+        return
 
     if method == "DFS":
         goal, nodes_created, path = dfs_search(graph, origin, destinations)
-
-        # REQUIRED OUTPUT FORMAT
-        print(f"{filename} {method}")
-        if goal is not None:
-            print(f"{goal} {nodes_created}")
-            print(" ".join(map(str, path)))
-        else:
-            print("No goal is reachable")
-
     elif method == "AS":
         goal, nodes_created, path = a_star_search(graph, coordinates, origin, destinations)
-
-        # REQUIRED OUTPUT FORMAT
-        print(f"{filename} {method}")
-        if goal is not None:
-            print(f"{goal} {nodes_created}")
-            print(" ".join(map(str, path)))
-        else:
-            print("No goal is reachable")
-
     else:
-        print("Method not supported yet")
+        print("Method not supported. Use DFS or AS.")
+        return
+
+   
+    print(f"{filename} {method}")
+    if goal is not None:
+        print(f"{goal} {nodes_created}")
+       
+        print(path) 
+    else:
+        print("No goal is reachable")
 
 
 if __name__ == "__main__":
