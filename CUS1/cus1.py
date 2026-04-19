@@ -1,5 +1,4 @@
 import sys
-from collections import deque
 
 
 # ─────────────────────────────────────────────
@@ -76,54 +75,105 @@ def parse_problem(filename):
 
 
 # ─────────────────────────────────────────────
-# Breadth-First Search (BFS)
+# Depth-Limited DFS
 # ─────────────────────────────────────────────
 
-def bfs(edges, origin, destinations):
+def depth_limited_dfs(edges, current, destinations, limit, path, node_counter):
     """
-    Breadth-First Search.
+    Recursive Depth-Limited DFS used by IDDFS.
 
-    Expands nodes level by level using a FIFO queue.
+    Args:
+        edges: adjacency dictionary
+        current: current node
+        destinations: set of goal nodes
+        limit: remaining depth limit
+        path: current path as a list
+        node_counter: single-item list storing total nodes created
+
+    Returns:
+        (goal_node, path_list) if found
+        (None, []) if not found
+    """
+    # Goal check
+    if current in destinations:
+        return current, path
+
+    # Stop if depth limit reached
+    if limit == 0:
+        return None, []
+
+    # Expand neighbours in ascending node order
+    neighbours = edges.get(current, [])
+    neighbours_sorted = sorted(neighbours, key=lambda x: x[0])
+
+    for neighbour, cost in neighbours_sorted:
+        # Prevent cycles in current path
+        if neighbour not in path:
+            node_counter[0] += 1
+            new_path = path + [neighbour]
+
+            goal, result_path = depth_limited_dfs(
+                edges,
+                neighbour,
+                destinations,
+                limit - 1,
+                new_path,
+                node_counter
+            )
+
+            if goal is not None:
+                return goal, result_path
+
+    return None, []
+
+
+# ─────────────────────────────────────────────
+# Iterative Deepening Depth-First Search (IDDFS)
+# ─────────────────────────────────────────────
+
+def iddfs(nodes, edges, origin, destinations):
+    """
+    Iterative Deepening Depth-First Search.
+
+    Repeatedly runs Depth-Limited DFS with increasing depth limits:
+    0, 1, 2, 3, ...
 
     Tie-breaking:
-      1. Nodes are expanded in breadth-first order.
-      2. Smaller node IDs are added first.
-      3. Earlier-added nodes are expanded first naturally by the queue.
+      1. Smaller node IDs are expanded first.
+      2. Earlier-added nodes are naturally explored first in DFS order.
 
     Returns:
         (goal_node, number_of_nodes_created, path_list)
     """
     destination_set = set(destinations)
 
-    # Queue entries: (current_node, path_to_current)
-    frontier = deque()
-    frontier.append((origin, [origin]))
+    # Maximum useful depth with cycle prevention is len(nodes) - 1
+    max_depth = len(nodes) - 1
 
-    # Count the start node as created
-    nodes_created = 1
+    # Count nodes created across all iterations
+    total_nodes_created = 0
 
-    while frontier:
-        current, path = frontier.popleft()
+    for depth_limit in range(max_depth + 1):
+        # Count the root node as created for each new depth-limited search
+        node_counter = [1]
+        total_nodes_created += 1
 
-        # Goal check
-        if current in destination_set:
-            return current, nodes_created, path
+        goal, path = depth_limited_dfs(
+            edges,
+            origin,
+            destination_set,
+            depth_limit,
+            [origin],
+            node_counter
+        )
 
-        # Get neighbours of current node
-        neighbours = edges.get(current, [])
+        # Add child nodes created during this iteration
+        total_nodes_created += (node_counter[0] - 1)
 
-        # Sort by neighbour node ID ascending
-        neighbours_sorted = sorted(neighbours, key=lambda x: x[0])
+        if goal is not None:
+            return goal, total_nodes_created, path
 
-        for neighbour, cost in neighbours_sorted:
-            # Prevent cycles in the current path
-            if neighbour not in path:
-                new_path = path + [neighbour]
-                frontier.append((neighbour, new_path))
-                nodes_created += 1
-
-    # No solution found
-    return None, nodes_created, []
+    return None, total_nodes_created, []
 
 
 # ─────────────────────────────────────────────
@@ -132,14 +182,14 @@ def bfs(edges, origin, destinations):
 
 def main():
     if len(sys.argv) != 3:
-        print("Usage: python search.py <filename> <method>")
+        print("Usage: python cus1.py <filename> <method>")
         sys.exit(1)
 
     filename = sys.argv[1]
     method = sys.argv[2].upper()
 
-    if method != "BFS":
-        print(f"This script only supports BFS. Got: {sys.argv[2]}")
+    if method != "CUS1":
+        print(f"This script only supports CUS1. Got: {sys.argv[2]}")
         sys.exit(1)
 
     try:
@@ -151,7 +201,7 @@ def main():
         print(f"Error while reading problem file: {e}")
         sys.exit(1)
 
-    goal, num_nodes, path = bfs(edges, origin, destinations)
+    goal, num_nodes, path = iddfs(nodes, edges, origin, destinations)
 
     print(f"{filename} {sys.argv[2]}")
 
