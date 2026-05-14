@@ -1,0 +1,16 @@
+[
+  {
+    "model": "GRU",
+    "MAE": 2.7241,
+    "RMSE": 3.4217,
+    "MAPE": 16.2773,
+    "params": 37889
+  },
+  {
+    "model": "Transformer",
+    "MAE": 5.4042,
+    "RMSE": 7.1569,
+    "MAPE": 28.6296,
+    "params": 67265
+  }
+]
