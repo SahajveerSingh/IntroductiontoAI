@@ -1,2 +1,0 @@
-# IntroductiontoAI
-Assignments
