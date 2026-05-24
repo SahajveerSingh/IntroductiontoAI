@@ -1,0 +1,4 @@
+dataset_split,first_date,last_date,time_series_rows,minimum_flow,maximum_flow,sequence_samples_window12
+train,2006-10-01 00:15:00,2006-10-21 00:15:00,278016,0,636,276348
+validation,2006-10-22 00:15:00,2006-10-26 00:15:00,61536,0,695,59880
+test,2006-10-27 00:15:00,2006-10-31 00:15:00,62880,0,616,61248
