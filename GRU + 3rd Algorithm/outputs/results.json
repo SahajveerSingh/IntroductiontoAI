@@ -1,0 +1,23 @@
+[
+  {
+    "model": "LSTM",
+    "MAE": 13.1468,
+    "RMSE": 19.748,
+    "MAPE": 18.5621,
+    "params": 50497
+  },
+  {
+    "model": "GRU",
+    "MAE": 13.5262,
+    "RMSE": 20.0762,
+    "MAPE": 20.239,
+    "params": 37889
+  },
+  {
+    "model": "Transformer",
+    "MAE": 14.8914,
+    "RMSE": 21.0728,
+    "MAPE": 27.6303,
+    "params": 67265
+  }
+]

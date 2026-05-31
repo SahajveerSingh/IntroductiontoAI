@@ -1,120 +1,48 @@
 """
 data/loader.py
 ─────────────
-Loads and preprocesses the Boroondara VicRoads traffic dataset.
+Loads preprocessed Boroondara traffic data from Member 1's pipeline.
 
-Expected CSV columns (case-insensitive, extras ignored):
-    SCATS_SITE  – integer site number
-    DATE        – date string (any format pandas can parse)
-    QT_INTERVAL_COUNT – 15-min volume count  (OR 'volume' / 'flow')
+Primary source  : model_ready_sequences_window12.npz
+                  (X_train, y_train, X_val, y_val, X_test, y_test)
+Fallback source : processed_scats_time_series_with_split_scaled.csv
+                  (long-format with traffic_flow_scaled + dataset_split)
 
-Usage:
-    from data.loader import load_datasets
-    train_dl, val_dl, test_dl, scaler = load_datasets()
+Scaling reference: train_min=0.0, train_max=636.0 (fitted on training data
+only by Member 1 — documented in data_quality_and_processing_summary.csv).
 """
 
 import os
+import sys
 import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader
 from sklearn.preprocessing import MinMaxScaler
 
-import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 
 
-# ── Column normalisation map ───────────────────────────────────────────────────
-_COL_ALIASES = {
-    "qt_interval_count": "volume",
-    "flow": "volume",
-    "traffic_volume": "volume",
-    "count": "volume",
-    "scats_site": "site",
-    "site_no": "site",
-    "nb_scats_site": "site",
-}
+# ── Scaler reconstruction ──────────────────────────────────────────────────────
+# Member 1 used min=0.0, max=636.0 fitted on training data only.
+# We reconstruct a compatible MinMaxScaler so evaluator.py can inverse-transform
+# predictions back to real vehicle counts without re-fitting on test data.
+
+def _build_scaler(train_min: float = config.TRAIN_MIN,
+                  train_max: float = config.TRAIN_MAX) -> MinMaxScaler:
+    scaler = MinMaxScaler(feature_range=(0, 1))
+    scaler.fit(np.array([[train_min], [train_max]]))
+    return scaler
 
 
-def _normalise_columns(df: pd.DataFrame) -> pd.DataFrame:
-    df.columns = [c.strip().lower() for c in df.columns]
-    df = df.rename(columns=_COL_ALIASES)
-    return df
-
-
-def _parse_dataset(path: str) -> pd.DataFrame:
-    """
-    Parse the VicRoads CSV.  Handles two common layouts:
-    - Wide: one row per (site, date), 96 columns V00..V95 for each 15-min slot.
-    - Long: one row per (site, datetime, volume).
-    Returns a long-format DataFrame with columns: site, datetime, volume.
-    """
-    df = pd.read_csv(path, low_memory=False)
-    df = _normalise_columns(df)
-
-    # ── Wide format detection: columns named V00, V01 … V95 ──────────────────
-    v_cols = [c for c in df.columns if c.startswith("v") and c[1:].isdigit()]
-    if len(v_cols) >= 96:
-        # Melt into long format
-        id_cols = [c for c in ["site", "date"] if c in df.columns]
-        df = df.melt(id_vars=id_cols, value_vars=v_cols,
-                     var_name="slot", value_name="volume")
-        df["slot_minutes"] = df["slot"].str[1:].astype(int) * 15
-        df["datetime"] = (pd.to_datetime(df["date"])
-                          + pd.to_timedelta(df["slot_minutes"], unit="m"))
-        df = df.drop(columns=["date", "slot", "slot_minutes"])
-    else:
-        # Long format — find datetime column
-        date_col = next((c for c in df.columns
-                         if "date" in c or "time" in c), None)
-        if date_col and date_col != "datetime":
-            df = df.rename(columns={date_col: "datetime"})
-        df["datetime"] = pd.to_datetime(df["datetime"])
-
-    df["volume"] = pd.to_numeric(df["volume"], errors="coerce")
-    df = df.dropna(subset=["volume"])
-    df["volume"] = df["volume"].clip(lower=0)
-    return df[["site", "datetime", "volume"]].sort_values(["site", "datetime"])
-
-
-def _generate_synthetic(n_sites: int = 5, days: int = 31) -> pd.DataFrame:
-    """
-    Fallback: generate realistic-looking synthetic traffic data so the code
-    runs end-to-end before the real dataset is available.
-    """
-    rng = np.random.default_rng(config.SEED)
-    records = []
-    base_time = pd.Timestamp("2006-10-01")
-    steps = days * 24 * 4  # 15-min intervals
-    sites = [2000 + i * 100 for i in range(n_sites)]
-    for site in sites:
-        for t in range(steps):
-            dt = base_time + pd.Timedelta(minutes=15 * t)
-            hour = dt.hour + dt.minute / 60
-            # Double-peaked daily profile (AM/PM peaks)
-            am = np.exp(-0.5 * ((hour - 8.0) / 1.2) ** 2)
-            pm = np.exp(-0.5 * ((hour - 17.0) / 1.5) ** 2)
-            base = 80 * (am + 0.85 * pm)
-            noise = rng.normal(0, 5)
-            records.append({"site": site, "datetime": dt,
-                             "volume": max(0, base + noise)})
-    return pd.DataFrame(records)
-
-
-def _make_windows(series: np.ndarray, seq_len: int, pred_len: int):
-    X, y = [], []
-    for i in range(len(series) - seq_len - pred_len + 1):
-        X.append(series[i: i + seq_len])
-        y.append(series[i + seq_len: i + seq_len + pred_len])
-    return np.array(X, dtype=np.float32), np.array(y, dtype=np.float32)
-
+# ── PyTorch Dataset ────────────────────────────────────────────────────────────
 
 class TrafficDataset(Dataset):
     def __init__(self, X: np.ndarray, y: np.ndarray):
-        # X: (N, seq_len, 1)   y: (N, pred_len)
-        self.X = torch.tensor(X).unsqueeze(-1)   # add feature dim
-        self.y = torch.tensor(y)
+        # X arrives as (N, seq_len) — add feature dim → (N, seq_len, 1)
+        self.X = torch.tensor(X, dtype=torch.float32).unsqueeze(-1)
+        self.y = torch.tensor(y, dtype=torch.float32).unsqueeze(-1)  # (N, 1)
 
     def __len__(self):
         return len(self.X)
@@ -123,64 +51,120 @@ class TrafficDataset(Dataset):
         return self.X[idx], self.y[idx]
 
 
-def load_datasets(verbose: bool = True):
+# ── NPZ loader (primary path) ──────────────────────────────────────────────────
+
+def _load_from_npz(path: str, verbose: bool) -> tuple:
+    if verbose:
+        print(f"[loader] Loading pre-built sequences from {path}")
+    data = np.load(path)
+    X_tr = data["X_train"]
+    y_tr = data["y_train"]
+    X_va = data["X_validation"]
+    y_va = data["y_validation"]
+    X_te = data["X_test"]
+    y_te = data["y_test"]
+    if verbose:
+        print(f"[loader] train={len(X_tr):,}  val={len(X_va):,}  test={len(X_te):,}  "
+              f"seq_len={X_tr.shape[1]}")
+    return X_tr, y_tr, X_va, y_va, X_te, y_te
+
+
+# ── CSV fallback loader ────────────────────────────────────────────────────────
+
+def _make_windows(series: np.ndarray, seq_len: int) -> tuple:
+    X, y = [], []
+    for i in range(seq_len, len(series)):
+        X.append(series[i - seq_len:i])
+        y.append(series[i])
+    return np.asarray(X, dtype=np.float32), np.asarray(y, dtype=np.float32)
+
+
+def _load_from_csv(path: str, verbose: bool) -> tuple:
+    if verbose:
+        print(f"[loader] NPZ not found — falling back to CSV: {path}")
+    df = pd.read_csv(path, low_memory=False)
+
+    # Aggregate across all sites: mean flow per timestamp per split
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df = df.sort_values("timestamp")
+
+    arrays = {}
+    for split, key in [("train", "tr"), ("validation", "va"), ("test", "te")]:
+        subset = (df[df["dataset_split"] == split]
+                  .groupby("timestamp")["traffic_flow_scaled"]
+                  .mean()
+                  .sort_index()
+                  .values
+                  .astype(np.float32))
+        X, y = _make_windows(subset, config.SEQ_LEN)
+        arrays[f"X_{key}"] = X
+        arrays[f"y_{key}"] = y
+        if verbose:
+            print(f"[loader]   {split}: {len(X):,} sequences")
+
+    return (arrays["X_tr"], arrays["y_tr"],
+            arrays["X_va"], arrays["y_va"],
+            arrays["X_te"], arrays["y_te"])
+
+
+# ── Synthetic fallback ─────────────────────────────────────────────────────────
+
+def _generate_synthetic(verbose: bool) -> tuple:
+    if verbose:
+        print("[loader] No data files found — generating synthetic data for testing.")
+    rng = np.random.default_rng(config.SEED)
+    steps = 31 * 96  # 31 days × 96 intervals
+    t = np.linspace(0, 31 * 2 * np.pi, steps)
+    series = (50 + 40 * np.sin(t) + 10 * np.sin(3 * t)
+              + rng.normal(0, 3, steps)).clip(0).astype(np.float32)
+    # Scale to [0,1] using training portion
+    train_end = int(steps * config.TRAIN_RATIO)
+    mn, mx = series[:train_end].min(), series[:train_end].max()
+    series = (series - mn) / (mx - mn)
+
+    X_all, y_all = _make_windows(series, config.SEQ_LEN)
+    n = len(X_all)
+    t_end = int(n * config.TRAIN_RATIO)
+    v_end = int(n * (config.TRAIN_RATIO + config.VAL_RATIO))
+    return (X_all[:t_end],  y_all[:t_end],
+            X_all[t_end:v_end], y_all[t_end:v_end],
+            X_all[v_end:],  y_all[v_end:])
+
+
+# ── Public API ─────────────────────────────────────────────────────────────────
+
+def load_datasets(verbose: bool = True) -> tuple:
     """
     Returns (train_loader, val_loader, test_loader, scaler).
-    scaler is fitted on training volume only — use it to inverse-transform
-    predictions back to cars/15-min.
+
+    Load priority:
+        1. config.NPZ_FILE  — Member 1's pre-built numpy sequences (fastest)
+        2. config.CSV_FILE  — Member 1's processed long-format CSV (fallback)
+        3. Synthetic data   — for offline testing when no data files exist
+
+    The returned scaler is reconstructed from Member 1's documented scaling
+    parameters (train_min=0, train_max=636) and should be used to
+    inverse-transform model predictions back to real vehicle counts.
     """
-    if os.path.exists(config.DATA_FILE):
-        if verbose:
-            print(f"[loader] Reading dataset from {config.DATA_FILE}")
-        df = _parse_dataset(config.DATA_FILE)
+    if os.path.exists(config.NPZ_FILE):
+        X_tr, y_tr, X_va, y_va, X_te, y_te = _load_from_npz(config.NPZ_FILE, verbose)
+    elif os.path.exists(config.CSV_FILE):
+        X_tr, y_tr, X_va, y_va, X_te, y_te = _load_from_csv(config.CSV_FILE, verbose)
     else:
-        if verbose:
-            print("[loader] Dataset file not found — using synthetic data for testing.")
-        df = _generate_synthetic()
+        X_tr, y_tr, X_va, y_va, X_te, y_te = _generate_synthetic(verbose)
 
-    # ── Site filtering ─────────────────────────────────────────────────────────
-    if config.TARGET_SITES:
-        df = df[df["site"].isin(config.TARGET_SITES)]
+    scaler = _build_scaler()
 
-    # ── Aggregate across all selected sites (mean per timestamp) ──────────────
-    series = (df.groupby("datetime")["volume"]
-                .mean()
-                .sort_index()
-                .values
-                .reshape(-1, 1)
-                .astype(np.float32))
+    def _make_loader(X, y, shuffle):
+        return DataLoader(
+            TrafficDataset(X, y),
+            batch_size=config.BATCH_SIZE,
+            shuffle=shuffle,
+            num_workers=0,
+            pin_memory=torch.cuda.is_available(),
+        )
 
-    # ── Normalise ─────────────────────────────────────────────────────────────
-    n = len(series)
-    train_end = int(n * config.TRAIN_RATIO)
-    val_end   = int(n * (config.TRAIN_RATIO + config.VAL_RATIO))
-
-    scaler = MinMaxScaler(feature_range=(0, 1))
-    scaler.fit(series[:train_end])
-    series_norm = scaler.transform(series).flatten()
-
-    # ── Window generation ─────────────────────────────────────────────────────
-    X_all, y_all = _make_windows(series_norm, config.SEQ_LEN, config.PRED_LEN)
-
-    # Recompute split indices on windowed arrays
-    n_w = len(X_all)
-    t_end = int(n_w * config.TRAIN_RATIO)
-    v_end = int(n_w * (config.TRAIN_RATIO + config.VAL_RATIO))
-
-    X_tr, y_tr = X_all[:t_end], y_all[:t_end]
-    X_va, y_va = X_all[t_end:v_end], y_all[t_end:v_end]
-    X_te, y_te = X_all[v_end:], y_all[v_end:]
-
-    if verbose:
-        print(f"[loader] Samples — train: {len(X_tr)}, val: {len(X_va)}, test: {len(X_te)}")
-
-    def make_loader(X, y, shuffle):
-        return DataLoader(TrafficDataset(X, y),
-                          batch_size=config.BATCH_SIZE,
-                          shuffle=shuffle,
-                          num_workers=0)
-
-    return (make_loader(X_tr, y_tr, True),
-            make_loader(X_va, y_va, False),
-            make_loader(X_te, y_te, False),
+    return (_make_loader(X_tr, y_tr, shuffle=True),
+            _make_loader(X_va, y_va, shuffle=False),
+            _make_loader(X_te, y_te, shuffle=False),
             scaler)
